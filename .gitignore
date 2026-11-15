@@ -1,0 +1,27 @@
+# Dependências
+/node_modules
+/.pnp
+.pnp.js
+
+# Build de produção
+/.next/
+/out/
+/build
+dist/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Variáveis locais e segredos
+.env*.local
+.env
+!.env.example
+
+# IDEs e Sistema Operacional
+.DS_Store
+*.pem
+.vscode/
+.idea/
+Thumbs.db
