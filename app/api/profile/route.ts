@@ -26,20 +26,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Chave de API não configurada na Vercel.' }, { status: 500 });
     }
 
-    // Formulário exato exigido pela Instagram Scraper Stable API
-    const formData = new FormData();
-    formData.append('username_or_url', username);
-    formData.append('data', 'basic');
-
-    const res = await fetch('https://instagram-scraper-stable-api.p.rapidapi.com/ig_get_fb_profile.php', {
-      method: 'POST',
-      headers: {
-        'x-rapidapi-key': apiKey,
-        'x-rapidapi-host': 'instagram-scraper-stable-api.p.rapidapi.com',
-      },
-      body: formData,
-      next: { revalidate: 180 },
-    });
+    // Chamada ao endpoint que traz o perfil E as postagens/reels (ig_get_fb_profile_hover)
+    const res = await fetch(
+      `https://instagram-scraper-stable-api.p.rapidapi.com/ig_get_fb_profile_hover.php?username_or_url=${encodeURIComponent(
+        username
+      )}`,
+      {
+        headers: {
+          'x-rapidapi-key': apiKey,
+          'x-rapidapi-host': 'instagram-scraper-stable-api.p.rapidapi.com',
+        },
+        next: { revalidate: 120 },
+      }
+    );
 
     if (!res.ok) {
       if (res.status === 404) {
@@ -49,80 +48,88 @@ export async function GET(req: NextRequest) {
     }
 
     const data = await res.json();
+    const userData = data.user_data || data.data || data;
 
-    if (!data || (!data.username && !data.full_name && !data.pk)) {
+    if (!userData || (!userData.username && !userData.full_name && !userData.pk)) {
       return NextResponse.json({ error: 'Perfil não encontrado ou conta privada.' }, { status: 404 });
     }
 
     const profilePic =
-      data.hd_profile_pic_url_info?.url ||
-      data.profile_pic_url ||
-      data.profile_pic_url_hd ||
+      userData.hd_profile_pic_url_info?.url ||
+      userData.profile_pic_url ||
       '';
 
-    // Cria os posts a partir das mídias retornadas ou da mídia de destaque do perfil
     const posts: PostItem[] = [];
 
-    if (profilePic) {
-      posts.push({
-        id: `avatar_${data.pk || username}`,
-        shortcode: 'AVATAR_HD',
-        type: 'image',
-        caption: `Foto de Perfil Oficial em Alta Resolução (@${data.username || username})`,
-        thumbnailUrl: profilePic,
-        mediaList: [
-          {
-            id: `avatar_img_${data.pk || username}`,
-            url: profilePic,
-            thumbnailUrl: profilePic,
-            type: 'image',
-          },
-        ],
-      });
-    }
+    // Processar todas as publicações e reels retornados em user_posts
+    const rawPosts = data.user_posts || userData.user_posts || [];
 
-    // Se o perfil trouxer posts ou reels vinculados
-    const items = data.items || data.edge_owner_to_timeline_media?.edges || [];
-    items.forEach((rawItem: any, idx: number) => {
-      const item = rawItem.node || rawItem;
+    rawPosts.forEach((entry: any, idx: number) => {
+      const media = entry.node?.media_dict || entry.node || entry;
+      const typeName = entry.node?.__typename || '';
+      
+      const isVideo =
+        typeName.toLowerCase().includes('video') ||
+        typeName.toLowerCase().includes('clip') ||
+        Boolean(media.is_video) ||
+        Boolean(media.video_versions);
+
+      const isCarousel =
+        typeName.toLowerCase().includes('carousel') ||
+        Boolean(media.carousel_media);
+
+      const postType: 'video' | 'image' | 'carousel' = isCarousel ? 'carousel' : isVideo ? 'video' : 'image';
+
+      const thumb =
+        media.image_versions2?.candidates?.[0]?.url ||
+        media.display_url ||
+        profilePic;
+
+      const mediaList: { id: string; url: string; thumbnailUrl: string; type: 'image' | 'video' }[] = [];
+
+      if (isCarousel && media.carousel_media) {
+        media.carousel_media.forEach((c: any, cIdx: number) => {
+          const cIsVideo = Boolean(c.video_versions) || Boolean(c.is_video);
+          const cUrl = c.video_versions?.[0]?.url || c.image_versions2?.candidates?.[0]?.url;
+          const cThumb = c.image_versions2?.candidates?.[0]?.url || thumb;
+          if (cUrl) {
+            mediaList.push({
+              id: c.id || `${media.id}_${cIdx}`,
+              url: cUrl,
+              thumbnailUrl: cThumb,
+              type: cIsVideo ? 'video' : 'image',
+            });
+          }
+        });
+      } else {
+        const itemUrl = media.video_versions?.[0]?.url || media.video_url || thumb;
+        mediaList.push({
+          id: media.id || `post_${idx}`,
+          url: itemUrl,
+          thumbnailUrl: thumb,
+          type: isVideo ? 'video' : 'image',
+        });
+      }
+
       posts.push({
-        id: item.id || `post_${idx}`,
-        shortcode: item.code || item.shortcode || `${idx}`,
-        type: item.carousel_media ? 'carousel' : item.is_video || item.video_versions ? 'video' : 'image',
-        caption: item.caption?.text || item.edge_media_to_caption?.edges?.[0]?.node?.text || '',
-        thumbnailUrl: item.image_versions2?.candidates?.[0]?.url || item.display_url || profilePic,
-        mediaList: item.carousel_media
-          ? item.carousel_media.map((c: any) => ({
-              id: c.id,
-              url: c.video_versions?.[0]?.url || c.image_versions2?.candidates?.[0]?.url || c.display_url,
-              thumbnailUrl: c.image_versions2?.candidates?.[0]?.url || c.display_url,
-              type: c.video_versions || c.is_video ? 'video' : 'image',
-            }))
-          : [
-              {
-                id: item.id || `media_${idx}`,
-                url:
-                  item.video_versions?.[0]?.url ||
-                  item.video_url ||
-                  item.image_versions2?.candidates?.[0]?.url ||
-                  item.display_url,
-                thumbnailUrl:
-                  item.image_versions2?.candidates?.[0]?.url || item.display_url,
-                type: item.is_video || item.video_versions ? 'video' : 'image',
-              },
-            ],
+        id: media.id || `post_${idx}`,
+        shortcode: media.code || `${idx}`,
+        type: postType,
+        caption: media.caption?.text || entry.node?.edge_media_to_caption?.edges?.[0]?.node?.text || '',
+        thumbnailUrl: thumb,
+        mediaList: mediaList.length > 0 ? mediaList : [{ id: `m_${idx}`, url: thumb, thumbnailUrl: thumb, type: isVideo ? 'video' : 'image' }],
       });
     });
 
     const profile: ProfileData = {
-      username: data.username || username,
-      fullName: data.full_name || '',
-      biography: data.biography || '',
+      username: userData.username || username,
+      fullName: userData.full_name || '',
+      biography: userData.biography || '',
       profilePicUrl: profilePic,
-      followersCount: data.follower_count || 0,
-      followingCount: data.following_count || 0,
-      postsCount: data.media_count || 0,
-      isPrivate: Boolean(data.is_private),
+      followersCount: userData.follower_count || 0,
+      followingCount: userData.following_count || 0,
+      postsCount: userData.media_count || 0,
+      isPrivate: Boolean(userData.is_private),
       posts,
     };
 
