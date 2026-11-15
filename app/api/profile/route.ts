@@ -2,80 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { extractUsername, ProfileData, PostItem } from '@/lib/instagram';
 import { adminDb } from '@/lib/firebaseAdmin';
 
-// Configuração para Serverless da Vercel
-export const maxDuration = 30; // 30 segundos de timeout na Vercel
+export const maxDuration = 45;
 export const dynamic = 'force-dynamic';
-
-function getMockProfile(username: string): ProfileData {
-  const mockPosts: PostItem[] = [
-    {
-      id: 'post_1',
-      shortcode: 'DEMO123',
-      type: 'video',
-      caption: '🚀 Exemplo de Reel/Vídeo de alta qualidade! #tech #developer',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80',
-      mediaList: [
-        {
-          id: 'v_1',
-          url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-          thumbnailUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80',
-          type: 'video'
-        }
-      ],
-      timestamp: Date.now() - 3600000
-    },
-    {
-      id: 'post_2',
-      shortcode: 'DEMO124',
-      type: 'carousel',
-      caption: '📸 Carrossel demonstrativo com múltiplos slides.',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=600&auto=format&fit=crop&q=80',
-      mediaList: [
-        {
-          id: 'c_1',
-          url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=1200&auto=format&fit=crop&q=90',
-          thumbnailUrl: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=600&auto=format&fit=crop&q=80',
-          type: 'image'
-        },
-        {
-          id: 'c_2',
-          url: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=1200&auto=format&fit=crop&q=90',
-          thumbnailUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=600&auto=format&fit=crop&q=80',
-          type: 'image'
-        }
-      ],
-      timestamp: Date.now() - 86400000
-    },
-    {
-      id: 'post_3',
-      shortcode: 'DEMO125',
-      type: 'image',
-      caption: '✨ Foto única em alta resolução.',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=600&auto=format&fit=crop&q=80',
-      mediaList: [
-        {
-          id: 'img_1',
-          url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&auto=format&fit=crop&q=90',
-          thumbnailUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=600&auto=format&fit=crop&q=80',
-          type: 'image'
-        }
-      ],
-      timestamp: Date.now() - 172800000
-    }
-  ];
-
-  return {
-    username,
-    fullName: `${username.charAt(0).toUpperCase() + username.slice(1)} (Perfil Público)`,
-    biography: 'Conta pública localizada com sucesso. Você pode visualizar e baixar os conteúdos abaixo.',
-    profilePicUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-    followersCount: 12450,
-    followingCount: 382,
-    postsCount: 48,
-    isPrivate: false,
-    posts: mockPosts
-  };
-}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -93,115 +21,121 @@ export async function GET(req: NextRequest) {
 
   try {
     const apiKey = process.env.INSTAGRAM_API_KEY;
-    let profile: ProfileData;
 
-    if (apiKey) {
-      // 1. Tenta o endpoint da Instagram Scraper Stable API (selecionada no RapidAPI)
-      let res = await fetch(`https://instagram-scraper-stable-api.p.rapidapi.com/account-data`, {
-        method: 'POST',
-        headers: {
-          'x-rapidapi-key': apiKey,
-          'x-rapidapi-host': 'instagram-scraper-stable-api.p.rapidapi.com',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username_or_url: username,
-          data: 'basic',
-        }),
-        next: { revalidate: 180 },
-      });
-
-      // Se falhar ou for 404, tenta o endpoint compatível da api2
-      if (!res.ok) {
-        res = await fetch(
-          `https://instagram-scraper-api2.p.rapidapi.com/v1/info?username_or_id_or_url=${encodeURIComponent(username)}`,
-          {
-            headers: {
-              'x-rapidapi-key': apiKey,
-              'x-rapidapi-host': 'instagram-scraper-api2.p.rapidapi.com',
-            },
-            next: { revalidate: 180 },
-          }
-        );
-      }
-
-      if (!res.ok) {
-        if (res.status === 404) {
-          return NextResponse.json({ error: 'Perfil não encontrado ou conta privada.' }, { status: 404 });
-        }
-        return NextResponse.json({ error: 'Erro ao consultar o perfil no Instagram.' }, { status: res.status });
-      }
-
-      const data = await res.json();
-      const profileInfo = data.data || data.user || data || {};
-
-      profile = {
-        username: profileInfo.username || username,
-        fullName: profileInfo.full_name || profileInfo.fullName || '',
-        biography: profileInfo.biography || profileInfo.bio || '',
-        profilePicUrl:
-          profileInfo.profile_pic_url_hd ||
-          profileInfo.profile_pic_url ||
-          profileInfo.hd_profile_pic_url_info?.url ||
-          '',
-        followersCount: profileInfo.follower_count || profileInfo.edge_followed_by?.count || 0,
-        followingCount: profileInfo.following_count || profileInfo.edge_follow?.count || 0,
-        postsCount: profileInfo.media_count || profileInfo.edge_owner_to_timeline_media?.count || 0,
-        isPrivate: Boolean(profileInfo.is_private),
-        posts: (profileInfo.items || profileInfo.posts || profileInfo.edge_owner_to_timeline_media?.edges || []).map(
-          (rawItem: any) => {
-            const item = rawItem.node || rawItem;
-            return {
-              id: item.id || item.pk,
-              shortcode: item.code || item.shortcode || item.id,
-              type: item.carousel_media ? 'carousel' : item.is_video || item.video_versions ? 'video' : 'image',
-              caption: item.caption?.text || item.edge_media_to_caption?.edges?.[0]?.node?.text || '',
-              thumbnailUrl:
-                item.image_versions2?.candidates?.[0]?.url || item.display_url || item.thumbnail_src || '',
-              mediaList: item.carousel_media
-                ? item.carousel_media.map((c: any) => ({
-                    id: c.id,
-                    url: c.video_versions?.[0]?.url || c.image_versions2?.candidates?.[0]?.url || c.display_url,
-                    thumbnailUrl: c.image_versions2?.candidates?.[0]?.url || c.display_url,
-                    type: c.video_versions || c.is_video ? 'video' : 'image',
-                  }))
-                : [
-                    {
-                      id: item.id || item.pk,
-                      url:
-                        item.video_versions?.[0]?.url ||
-                        item.video_url ||
-                        item.image_versions2?.candidates?.[0]?.url ||
-                        item.display_url,
-                      thumbnailUrl:
-                        item.image_versions2?.candidates?.[0]?.url || item.display_url || item.thumbnail_src,
-                      type: item.is_video || item.video_versions ? 'video' : 'image',
-                    },
-                  ],
-            };
-          }
-        ),
-      };
-    } else {
-      profile = getMockProfile(username);
+    if (!apiKey) {
+      return NextResponse.json({ error: 'Chave de API não configurada na Vercel.' }, { status: 500 });
     }
 
-    // Salvar registro de busca no Firebase Firestore de forma assíncrona
-    if (adminDb) {
-      try {
-        await adminDb.collection('searches').add({
-          username: profile.username,
-          searchedAt: new Date().toISOString(),
-          postsFound: profile.posts.length,
-          userAgent: req.headers.get('user-agent') || 'unknown'
-        });
-      } catch (dbErr) {
-        console.warn('Erro não bloqueante ao registrar busca no Firestore:', dbErr);
+    // Formulário exato exigido pela Instagram Scraper Stable API
+    const formData = new FormData();
+    formData.append('username_or_url', username);
+    formData.append('data', 'basic');
+
+    const res = await fetch('https://instagram-scraper-stable-api.p.rapidapi.com/ig_get_fb_profile.php', {
+      method: 'POST',
+      headers: {
+        'x-rapidapi-key': apiKey,
+        'x-rapidapi-host': 'instagram-scraper-stable-api.p.rapidapi.com',
+      },
+      body: formData,
+      next: { revalidate: 180 },
+    });
+
+    if (!res.ok) {
+      if (res.status === 404) {
+        return NextResponse.json({ error: 'Perfil não encontrado ou conta privada.' }, { status: 404 });
       }
+      return NextResponse.json({ error: `Erro na API do Instagram (${res.status}).` }, { status: res.status });
+    }
+
+    const data = await res.json();
+
+    if (!data || (!data.username && !data.full_name && !data.pk)) {
+      return NextResponse.json({ error: 'Perfil não encontrado ou conta privada.' }, { status: 404 });
+    }
+
+    const profilePic =
+      data.hd_profile_pic_url_info?.url ||
+      data.profile_pic_url ||
+      data.profile_pic_url_hd ||
+      '';
+
+    // Cria os posts a partir das mídias retornadas ou da mídia de destaque do perfil
+    const posts: PostItem[] = [];
+
+    if (profilePic) {
+      posts.push({
+        id: `avatar_${data.pk || username}`,
+        shortcode: 'AVATAR_HD',
+        type: 'image',
+        caption: `Foto de Perfil Oficial em Alta Resolução (@${data.username || username})`,
+        thumbnailUrl: profilePic,
+        mediaList: [
+          {
+            id: `avatar_img_${data.pk || username}`,
+            url: profilePic,
+            thumbnailUrl: profilePic,
+            type: 'image',
+          },
+        ],
+      });
+    }
+
+    // Se o perfil trouxer posts ou reels vinculados
+    const items = data.items || data.edge_owner_to_timeline_media?.edges || [];
+    items.forEach((rawItem: any, idx: number) => {
+      const item = rawItem.node || rawItem;
+      posts.push({
+        id: item.id || `post_${idx}`,
+        shortcode: item.code || item.shortcode || `${idx}`,
+        type: item.carousel_media ? 'carousel' : item.is_video || item.video_versions ? 'video' : 'image',
+        caption: item.caption?.text || item.edge_media_to_caption?.edges?.[0]?.node?.text || '',
+        thumbnailUrl: item.image_versions2?.candidates?.[0]?.url || item.display_url || profilePic,
+        mediaList: item.carousel_media
+          ? item.carousel_media.map((c: any) => ({
+              id: c.id,
+              url: c.video_versions?.[0]?.url || c.image_versions2?.candidates?.[0]?.url || c.display_url,
+              thumbnailUrl: c.image_versions2?.candidates?.[0]?.url || c.display_url,
+              type: c.video_versions || c.is_video ? 'video' : 'image',
+            }))
+          : [
+              {
+                id: item.id || `media_${idx}`,
+                url:
+                  item.video_versions?.[0]?.url ||
+                  item.video_url ||
+                  item.image_versions2?.candidates?.[0]?.url ||
+                  item.display_url,
+                thumbnailUrl:
+                  item.image_versions2?.candidates?.[0]?.url || item.display_url,
+                type: item.is_video || item.video_versions ? 'video' : 'image',
+              },
+            ],
+      });
+    });
+
+    const profile: ProfileData = {
+      username: data.username || username,
+      fullName: data.full_name || '',
+      biography: data.biography || '',
+      profilePicUrl: profilePic,
+      followersCount: data.follower_count || 0,
+      followingCount: data.following_count || 0,
+      postsCount: data.media_count || 0,
+      isPrivate: Boolean(data.is_private),
+      posts,
+    };
+
+    if (adminDb) {
+      adminDb.collection('searches').add({
+        username: profile.username,
+        searchedAt: new Date().toISOString(),
+        postsFound: profile.posts.length,
+      }).catch(() => {});
     }
 
     return NextResponse.json(profile);
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Erro interno ao processar solicitação.' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Erro interno ao consultar o perfil.' }, { status: 500 });
   }
 }
