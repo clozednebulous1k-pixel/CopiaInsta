@@ -96,55 +96,91 @@ export async function GET(req: NextRequest) {
     let profile: ProfileData;
 
     if (apiKey) {
-      const res = await fetch(`https://instagram-scraper-api2.p.rapidapi.com/v1/info?username_or_id_or_url=${encodeURIComponent(username)}`, {
+      // 1. Tenta o endpoint da Instagram Scraper Stable API (selecionada no RapidAPI)
+      let res = await fetch(`https://instagram-scraper-stable-api.p.rapidapi.com/account-data`, {
+        method: 'POST',
         headers: {
           'x-rapidapi-key': apiKey,
-          'x-rapidapi-host': 'instagram-scraper-api2.p.rapidapi.com',
+          'x-rapidapi-host': 'instagram-scraper-stable-api.p.rapidapi.com',
+          'Content-Type': 'application/json',
         },
-        next: { revalidate: 180 }
+        body: JSON.stringify({
+          username_or_url: username,
+          data: 'basic',
+        }),
+        next: { revalidate: 180 },
       });
+
+      // Se falhar ou for 404, tenta o endpoint compatível da api2
+      if (!res.ok) {
+        res = await fetch(
+          `https://instagram-scraper-api2.p.rapidapi.com/v1/info?username_or_id_or_url=${encodeURIComponent(username)}`,
+          {
+            headers: {
+              'x-rapidapi-key': apiKey,
+              'x-rapidapi-host': 'instagram-scraper-api2.p.rapidapi.com',
+            },
+            next: { revalidate: 180 },
+          }
+        );
+      }
 
       if (!res.ok) {
         if (res.status === 404) {
-          return NextResponse.json({ error: 'Perfil não encontrado.' }, { status: 404 });
+          return NextResponse.json({ error: 'Perfil não encontrado ou conta privada.' }, { status: 404 });
         }
-        return NextResponse.json({ error: 'Erro ao consultar a API upstream.' }, { status: res.status });
+        return NextResponse.json({ error: 'Erro ao consultar o perfil no Instagram.' }, { status: res.status });
       }
 
       const data = await res.json();
-      const profileInfo = data.data || {};
+      const profileInfo = data.data || data.user || data || {};
 
       profile = {
         username: profileInfo.username || username,
-        fullName: profileInfo.full_name || '',
-        biography: profileInfo.biography || '',
-        profilePicUrl: profileInfo.profile_pic_url_hd || profileInfo.profile_pic_url || '',
-        followersCount: profileInfo.follower_count || 0,
-        followingCount: profileInfo.following_count || 0,
-        postsCount: profileInfo.media_count || 0,
+        fullName: profileInfo.full_name || profileInfo.fullName || '',
+        biography: profileInfo.biography || profileInfo.bio || '',
+        profilePicUrl:
+          profileInfo.profile_pic_url_hd ||
+          profileInfo.profile_pic_url ||
+          profileInfo.hd_profile_pic_url_info?.url ||
+          '',
+        followersCount: profileInfo.follower_count || profileInfo.edge_followed_by?.count || 0,
+        followingCount: profileInfo.following_count || profileInfo.edge_follow?.count || 0,
+        postsCount: profileInfo.media_count || profileInfo.edge_owner_to_timeline_media?.count || 0,
         isPrivate: Boolean(profileInfo.is_private),
-        posts: (profileInfo.items || []).map((item: any) => ({
-          id: item.id,
-          shortcode: item.code || item.id,
-          type: item.carousel_media ? 'carousel' : item.video_versions ? 'video' : 'image',
-          caption: item.caption?.text || '',
-          thumbnailUrl: item.image_versions2?.candidates?.[0]?.url || '',
-          mediaList: item.carousel_media
-            ? item.carousel_media.map((c: any) => ({
-                id: c.id,
-                url: c.video_versions?.[0]?.url || c.image_versions2?.candidates?.[0]?.url,
-                thumbnailUrl: c.image_versions2?.candidates?.[0]?.url,
-                type: c.video_versions ? 'video' : 'image',
-              }))
-            : [
-                {
-                  id: item.id,
-                  url: item.video_versions?.[0]?.url || item.image_versions2?.candidates?.[0]?.url,
-                  thumbnailUrl: item.image_versions2?.candidates?.[0]?.url,
-                  type: item.video_versions ? 'video' : 'image',
-                },
-              ],
-        })),
+        posts: (profileInfo.items || profileInfo.posts || profileInfo.edge_owner_to_timeline_media?.edges || []).map(
+          (rawItem: any) => {
+            const item = rawItem.node || rawItem;
+            return {
+              id: item.id || item.pk,
+              shortcode: item.code || item.shortcode || item.id,
+              type: item.carousel_media ? 'carousel' : item.is_video || item.video_versions ? 'video' : 'image',
+              caption: item.caption?.text || item.edge_media_to_caption?.edges?.[0]?.node?.text || '',
+              thumbnailUrl:
+                item.image_versions2?.candidates?.[0]?.url || item.display_url || item.thumbnail_src || '',
+              mediaList: item.carousel_media
+                ? item.carousel_media.map((c: any) => ({
+                    id: c.id,
+                    url: c.video_versions?.[0]?.url || c.image_versions2?.candidates?.[0]?.url || c.display_url,
+                    thumbnailUrl: c.image_versions2?.candidates?.[0]?.url || c.display_url,
+                    type: c.video_versions || c.is_video ? 'video' : 'image',
+                  }))
+                : [
+                    {
+                      id: item.id || item.pk,
+                      url:
+                        item.video_versions?.[0]?.url ||
+                        item.video_url ||
+                        item.image_versions2?.candidates?.[0]?.url ||
+                        item.display_url,
+                      thumbnailUrl:
+                        item.image_versions2?.candidates?.[0]?.url || item.display_url || item.thumbnail_src,
+                      type: item.is_video || item.video_versions ? 'video' : 'image',
+                    },
+                  ],
+            };
+          }
+        ),
       };
     } else {
       profile = getMockProfile(username);
