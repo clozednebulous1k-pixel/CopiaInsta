@@ -4,26 +4,27 @@ import React, { useState } from 'react';
 import SearchBar from '@/components/SearchBar';
 import ProfileHeader from '@/components/ProfileHeader';
 import MediaCard from '@/components/MediaCard';
-import { ProfileData } from '@/lib/instagram';
-import { AlertCircle, Film, Image as ImageIcon, Sparkles, Layers } from 'lucide-react';
+import { ProfileData, PostItem } from '@/lib/instagram';
+import { AlertCircle, Film, Image as ImageIcon, Sparkles, Layers, Loader2 } from 'lucide-react';
 
 type FilterType = 'all' | 'video' | 'image';
 
 export default function Home() {
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
-  const [visibleCount, setVisibleCount] = useState(12);
+  const [currentQuery, setCurrentQuery] = useState('');
 
   const handleSearch = async (query: string) => {
     setLoading(true);
     setError(null);
     setProfile(null);
-    setVisibleCount(12);
+    setCurrentQuery(query);
 
     try {
-      const res = await fetch(`/api/profile?q=${encodeURIComponent(query)}`);
+      const res = await fetch(`/api/profile?q=${encodeURIComponent(query)}&mode=all`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -38,6 +39,46 @@ export default function Home() {
     }
   };
 
+  const handleLoadMore = async () => {
+    if (!profile || loadingMore) return;
+    const hasMorePosts = Boolean(profile.postsPaginationToken);
+    const hasMoreReels = Boolean(profile.reelsPaginationToken);
+
+    if (!hasMorePosts && !hasMoreReels) return;
+
+    setLoadingMore(true);
+
+    try {
+      const params = new URLSearchParams({
+        q: currentQuery || profile.username,
+        postToken: profile.postsPaginationToken || '',
+        reelToken: profile.reelsPaginationToken || '',
+        mode: filter === 'video' ? 'more_reels' : filter === 'image' ? 'more_posts' : 'all',
+      });
+
+      const res = await fetch(`/api/profile?${params.toString()}`);
+      const data = await res.json();
+
+      if (res.ok && data.posts) {
+        setProfile((prev) => {
+          if (!prev) return data;
+          const existingIds = new Set(prev.posts.map((p) => p.id));
+          const newPosts = data.posts.filter((p: PostItem) => !existingIds.has(p.id));
+          return {
+            ...prev,
+            posts: [...prev.posts, ...newPosts],
+            postsPaginationToken: data.postsPaginationToken,
+            reelsPaginationToken: data.reelsPaginationToken,
+          };
+        });
+      }
+    } catch (err) {
+      console.error('Erro ao carregar mais:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const filteredPosts = (profile?.posts || []).filter((post) => {
     if (filter === 'all') return true;
     if (filter === 'video') return post.type === 'video';
@@ -45,7 +86,7 @@ export default function Home() {
     return true;
   });
 
-  const displayedPosts = filteredPosts.slice(0, visibleCount);
+  const hasMore = Boolean(profile?.postsPaginationToken || profile?.reelsPaginationToken);
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 px-4 py-12 md:px-8">
@@ -59,7 +100,7 @@ export default function Home() {
             Baixe Mídias do Instagram
           </h1>
           <p className="text-zinc-400 text-sm md:text-base leading-relaxed">
-            Consulte perfis públicos, visualize carrosséis, Reels e fotos em alta resolução e faça downloads diretos sem bloqueios de CORS.
+            Consulte perfis públicos, visualize todo o histórico de Reels, carrosséis e fotos em alta resolução e faça downloads diretos sem bloqueio de CORS.
           </p>
         </div>
 
@@ -74,7 +115,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* Skeleton de Carregamento */}
+        {/* Skeleton de Carregamento Inicial */}
         {loading && (
           <div className="w-full max-w-4xl mt-12 space-y-6 animate-pulse">
             <div className="h-40 bg-zinc-900 border border-zinc-800 rounded-2xl" />
@@ -111,7 +152,8 @@ export default function Home() {
                     : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
                 }`}
               >
-                <Film className="w-3.5 h-3.5" /> Vídeos / Reels
+                <Film className="w-3.5 h-3.5" /> Vídeos / Reels (
+                {profile.posts.filter((p) => p.type === 'video').length})
               </button>
               <button
                 onClick={() => setFilter('image')}
@@ -121,31 +163,39 @@ export default function Home() {
                     : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
                 }`}
               >
-                <ImageIcon className="w-3.5 h-3.5" /> Fotos / Carrosséis
+                <ImageIcon className="w-3.5 h-3.5" /> Fotos / Carrosséis (
+                {profile.posts.filter((p) => p.type !== 'video').length})
               </button>
             </div>
 
             {/* Grid de Postagens */}
-            {displayedPosts.length === 0 ? (
+            {filteredPosts.length === 0 ? (
               <p className="text-center text-zinc-500 my-12 text-sm">
                 Nenhuma publicação encontrada para o filtro selecionado.
               </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {displayedPosts.map((post) => (
+                {filteredPosts.map((post) => (
                   <MediaCard key={post.id} post={post} />
                 ))}
               </div>
             )}
 
-            {/* Botão Carregar Mais */}
-            {visibleCount < filteredPosts.length && (
+            {/* Botão Carregar Mais com Paginação Real */}
+            {hasMore && (
               <div className="flex justify-center mt-10">
                 <button
-                  onClick={() => setVisibleCount((prev) => prev + 12)}
-                  className="px-6 py-2.5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-xs font-medium text-white rounded-xl transition-all cursor-pointer"
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="px-6 py-3 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 hover:border-pink-500/50 text-xs font-semibold text-white rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-lg"
                 >
-                  Carregar mais mídias
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-pink-500" /> Carregando mais mídias...
+                    </>
+                  ) : (
+                    'Carregar mais publicações'
+                  )}
                 </button>
               </div>
             )}
@@ -155,4 +205,3 @@ export default function Home() {
     </main>
   );
 }
-
